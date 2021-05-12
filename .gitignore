@@ -1,0 +1,9 @@
+build
+.vscode
+*.swp
+*.swo
+*.swj
+.DS_Build
+Thumbs.db
+__MACOSX
+._*

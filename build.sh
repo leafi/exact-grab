@@ -11,10 +11,11 @@ mkdir -p $OUT_DIR
 
 cp -r locale $OUT_DIR/locale
 cp *.lua $OUT_DIR/
+cp changelog.txt $OUT_DIR/changelog.txt
 cp info.json $OUT_DIR/info.json
+cp LICENSE $OUT_DIR/LICENSE
 cp thumbnail.png $OUT_DIR/thumbnail.png
-#cp changelog.txt $OUT_DIR/changelog.txt
 
-pushd build
+pushd build 2>&1 >/dev/null
 zip -r $OUT_SUBDIR.zip $OUT_SUBDIR
-popd
+popd 2>&1 >/dev/null

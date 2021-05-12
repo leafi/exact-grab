@@ -7,11 +7,35 @@ local original_inv_whitelist = {
   [defines.inventory.character_trash] = true
 }
 
-local last_hand_location = nil
-local last_hand_sis = nil
+local function reinit_vars()
+  global.last_hand_location = {}
+  global.last_hand_sis = {}
+  global.chosen_item_name = {}
+  global.chosen_item_count = {}
+end
 
-local chosen_item_name = nil
-local chosen_item_count = 0
+local function reset_for_player(pi)
+  global.last_hand_location[pi] = nil
+  global.last_hand_sis[pi] = nil
+  global.chosen_item_name[pi] = nil
+  global.chosen_item_count[pi] = 0
+end
+
+script.on_configuration_changed(function()
+  reinit_vars()
+end)
+
+script.on_init(function()
+  reinit_vars()
+end)
+
+script.on_event(defines.events.on_player_joined_game, function(event)
+  reset_for_player(event.player_index)
+end)
+
+script.on_event(defines.events.on_player_left_game, function(event)
+  reset_for_player(event.player_index)
+end)
 
 local function conditions_ok(event, loud)
   if game.get_player(event.player_index) ~= nil then
@@ -41,19 +65,19 @@ local function conditions_ok(event, loud)
 end
 
 
-local function apply_desired_grab(player, no_read_cstack, quiet)
+local function apply_desired_grab(pi, player, no_read_cstack, quiet)
   -- put back what's already grabbed
   local oinv = player.get_inventory(
-    no_read_cstack and last_hand_location.inventory or 
+    no_read_cstack and global.last_hand_location[pi] and global.last_hand_location[pi].inventory or
     player.hand_location ~= nil and player.hand_location.inventory or
     defines.inventory.character_main
   )
 
-  local pname = no_read_cstack and chosen_item_name or player.cursor_stack.name
+  local pname = no_read_cstack and global.chosen_item_name[pi] or player.cursor_stack.name
 
   -- try and grab that many items from the inventory
   local available = oinv.get_item_count(pname) + ((not no_read_cstack) and player.cursor_stack.count or 0)
-  local desired = chosen_item_count
+  local desired = global.chosen_item_count[pi] or 0
 
   local capped_available = false
   local capped_stack_size = false
@@ -72,21 +96,21 @@ local function apply_desired_grab(player, no_read_cstack, quiet)
     capped_stack_size = true
   end
 
-  local sis = no_read_cstack and last_hand_sis or {
+  local sis = no_read_cstack and global.last_hand_sis[pi] or {
     name=pname,
     count=1,
     health=player.cursor_stack.health,
     durability=player.cursor_stack.durability
   }
-  last_hand_sis = sis
+  global.last_hand_sis[pi] = sis
   if not no_read_cstack then
     if player.cursor_stack.is_item_with_tags then sis.tags = player.cursor_stack.tags end
     if player.cursor_stack.prototype.get_ammo_type() ~= nil then sis.ammo = player.cursor_stack.ammo end
   end
 
   local old_hand_location = nil
-  if no_read_cstack and last_hand_location then
-    old_hand_location = last_hand_location
+  if no_read_cstack and global.last_hand_location[pi] then
+    old_hand_location = global.last_hand_location[pi]
   elseif player.hand_location ~= nil then
     old_hand_location = {
       inventory=player.hand_location.inventory,
@@ -104,7 +128,7 @@ local function apply_desired_grab(player, no_read_cstack, quiet)
     player.print({"exact-grab-error-free-slot"})
     return false
   end
-  last_hand_location = old_hand_location
+  global.last_hand_location[pi] = old_hand_location
 
   -- need to grab more!
   sis.count = desired
@@ -112,7 +136,7 @@ local function apply_desired_grab(player, no_read_cstack, quiet)
 
   sis.count = grabbed
   player.cursor_stack.set_stack(sis)
-  
+
   -- restore hand_location
   -- (..but use a free slot, otherwise Factorio complains)
   local freeis, freeisnum = oinv.find_empty_stack(pname)
@@ -125,64 +149,67 @@ local function apply_desired_grab(player, no_read_cstack, quiet)
     capped_available and "exact-grab-grabbed-cap" or
     capped_stack_size and "exact-grab-grabbed-stack" or
     "exact-grab-grabbed"
-  
+
   if not quiet then
-    player.create_local_flying_text({text={which_str, tostring(chosen_item_count), tostring(grabbed)}, create_at_cursor=true})
+    player.create_local_flying_text({text={which_str, tostring(global.chosen_item_count[pi]), tostring(grabbed)}, create_at_cursor=true})
   end
   return true
 end
 
 local function stack_numkey_pressed(num, event)
   if conditions_ok(event, true) then
-    local player = game.get_player(event.player_index)
+    local pi = event.player_index
+    local player = game.get_player(pi)
 
     if not player.cursor_stack.prototype.stackable then
       player.create_local_flying_text({text={"exact-grab-error-not-stackable"}, create_at_cursor=true})
-      chosen_item_count = 0
-      chosen_item_name = nil
+      global.chosen_item_count[pi] = 0
+      global.chosen_item_name[pi] = nil
       return
     end
 
-    if chosen_item_count == 0 then
-      chosen_item_count = num
+    if global.chosen_item_count[pi] == nil or global.chosen_item_count[pi] == 0 then
+      global.chosen_item_count[pi] = num
       if num == 0 then return end
-      chosen_item_name = player.cursor_stack.name
-    elseif chosen_item_name ~= player.cursor_stack.name or chosen_item_count ~= player.cursor_stack.count then
-      chosen_item_name = nil
-      chosen_item_count = num
+      global.chosen_item_name[pi] = player.cursor_stack.name
+    elseif global.chosen_item_name[pi] ~= player.cursor_stack.name or global.chosen_item_count[pi] ~= player.cursor_stack.count then
+      global.chosen_item_name[pi] = nil
+      global.chosen_item_count[pi] = num
       if num == 0 then return end
-      chosen_item_name = player.cursor_stack.name
+      global.chosen_item_name[pi] = player.cursor_stack.name
     else
-      chosen_item_count = chosen_item_count * 10 + num
-      if chosen_item_count > player.cursor_stack.prototype.stack_size then
-        chosen_item_name = nil
-        chosen_item_count = num
+      global.chosen_item_count[pi] = global.chosen_item_count[pi] * 10 + num
+      if global.chosen_item_count[pi] > player.cursor_stack.prototype.stack_size then
+        global.chosen_item_name[pi] = nil
+        global.chosen_item_count[pi] = num
         if num == 0 then return end
-        chosen_item_name = player.cursor_stack.name
+        global.chosen_item_name[pi] = player.cursor_stack.name
       end
     end
 
-    apply_desired_grab(player, false, true)
+    apply_desired_grab(pi, player, false, true)
   end
 end
 
 script.on_event("exact-grab-clear-key", function(event)
-  chosen_item_name = nil
-  chosen_item_count = 0
-  last_hand_location = nil
-  last_hand_sis = nil
+  local pi = event.player_index
+  global.chosen_item_name[pi] = nil
+  global.chosen_item_count[pi] = 0
+  global.last_hand_location[pi] = nil
+  global.last_hand_sis[pi] = nil
 
-  local player = game.get_player(event.player_index)
+  local player = game.get_player(pi)
   player.create_local_flying_text({text={"exact-grab-cleared"}})
 end)
 
 -- Re-apply grab #
 script.on_event("exact-grab-recall-key", function(event)
-  if chosen_item_count > 0 and last_hand_location ~= nil and last_hand_sis ~= nil then
-    local player = game.get_player(event.player_index)
+  local pi = event.player_index
+  if global.chosen_item_count[pi] > 0 and global.last_hand_location[pi] ~= nil and global.last_hand_sis[pi] ~= nil then
+    local player = game.get_player(pi)
     if player ~= nil then
       player.clear_cursor()
-      apply_desired_grab(player, true, true)
+      apply_desired_grab(pi, player, true, true)
     end
   end
 end)
@@ -195,21 +222,22 @@ for i=0,9 do
 end
 
 local function add_remove_pressed(delta, event)
-  local player = game.get_player(event.player_index)
+  local pi = event.player_index
+  local player = game.get_player(pi)
   if player == nil then return end
 
   -- hack for those who can't stop scrolling
   if (player.cursor_stack == nil) or (not player.cursor_stack.valid_for_read) then
     if delta > 0 then
-      if chosen_item_count > 0 and last_hand_location ~= nil and last_hand_sis ~= nil then
+      if global.chosen_item_count[pi] > 0 and global.last_hand_location[pi] ~= nil and global.last_hand_sis[pi] ~= nil then
         -- empty stack; treat e.g. "+5" as "recall 5 of last item"
         -- 1. recall at least 1
-        chosen_item_count = 1
-        if apply_desired_grab(player, true, true) then
+        global.chosen_item_count[pi] = 1
+        if apply_desired_grab(pi, player, true, true) then
           -- 2. good? good. now grab the real number.
-          if chosen_item_count > 1 then
-            chosen_item_count = delta
-            apply_desired_grab(player, false, true)
+          if global.chosen_item_count[pi] > 1 then
+            global.chosen_item_count[pi] = delta
+            apply_desired_grab(pi, player, false, true)
           end
         end
       end
@@ -221,26 +249,24 @@ local function add_remove_pressed(delta, event)
   if conditions_ok(event, true) then
     if not player.cursor_stack.prototype.stackable then
       player.create_local_flying_text({text={"exact-grab-error-not-stackable"}, create_at_cursor=true})
-      chosen_item_count = 0
-      chosen_item_name = nil
+      global.chosen_item_count[pi] = 0
+      global.chosen_item_name[pi] = nil
       return
     end
 
-    chosen_item_name = player.cursor_stack.name
-    chosen_item_count = player.cursor_stack.count
+    global.chosen_item_name[pi] = player.cursor_stack.name
+    global.chosen_item_count[pi] = player.cursor_stack.count + delta
 
-    chosen_item_count = player.cursor_stack.count + delta
-
-    if chosen_item_count < 1 then
+    if global.chosen_item_count[pi] == nil or global.chosen_item_count[pi] < 1 then
       player.clear_cursor()
       -- but leave it at 1, so you can 'scroll up' again. a bit evil!
       -- this comes from us using chosen_item_count to mean both 'what the user typed in explicitly' and 'what i want right now'
       -- maybe fix in the future? it'll make the UX better if we do(!)
-      chosen_item_count = 1
+      global.chosen_item_count[pi] = 1
       return
     end
 
-    apply_desired_grab(player, false, true)
+    apply_desired_grab(pi, player, false, true)
   end
 end
 
